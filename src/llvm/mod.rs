@@ -15,11 +15,12 @@ use iter::{IterModuleFunctions as _, IterModuleGlobalAliases as _, IterModuleGlo
 use llvm_sys::{
     bit_reader::LLVMParseBitcodeInContext2,
     core::{
-        LLVMCreateMemoryBufferWithMemoryRange, LLVMDisposeMemoryBuffer, LLVMDisposeMessage,
-        LLVMGetDiagInfoDescription, LLVMGetDiagInfoSeverity, LLVMGetEnumAttributeKindForName,
-        LLVMGetMDString, LLVMGetModuleInlineAsm, LLVMGetTarget, LLVMGetValueName2,
-        LLVMModuleCreateWithNameInContext, LLVMPrintModuleToFile, LLVMRemoveEnumAttributeAtIndex,
-        LLVMSetLinkage, LLVMSetModuleInlineAsm2, LLVMSetVisibility,
+        LLVMCountBasicBlocks, LLVMCreateMemoryBufferWithMemoryRange, LLVMDisposeMemoryBuffer,
+        LLVMDisposeMessage, LLVMGetDiagInfoDescription, LLVMGetDiagInfoSeverity,
+        LLVMGetEnumAttributeKindForName, LLVMGetMDString, LLVMGetModuleInlineAsm, LLVMGetTarget,
+        LLVMGetValueName2, LLVMIsAFunction, LLVMModuleCreateWithNameInContext,
+        LLVMPrintModuleToFile, LLVMRemoveEnumAttributeAtIndex, LLVMSetLinkage,
+        LLVMSetModuleInlineAsm2, LLVMSetVisibility,
     },
     debuginfo::LLVMStripModuleDebugInfo,
     error::{
@@ -47,7 +48,7 @@ use llvm_sys::{
     },
     LLVMAttributeFunctionIndex, LLVMLinkage, LLVMVisibility,
 };
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::OptLevel;
 
@@ -313,6 +314,16 @@ pub(crate) fn internalize(
     export_symbols: &HashSet<Cow<'_, [u8]>>,
 ) {
     if !name.starts_with(b"llvm.") && !export_symbols.contains(name) {
+        if unsafe { !LLVMIsAFunction(value).is_null() } {
+            let num_blocks = unsafe { LLVMCountBasicBlocks(value) };
+            if num_blocks == 0 {
+                info!(
+                    "not internalizing undefined function {}",
+                    str::from_utf8(name).unwrap_or("<invalid utf8>")
+                );
+                return;
+            }
+        }
         unsafe { LLVMSetLinkage(value, LLVMLinkage::LLVMInternalLinkage) };
         unsafe { LLVMSetVisibility(value, LLVMVisibility::LLVMDefaultVisibility) };
     }
