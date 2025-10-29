@@ -156,6 +156,8 @@ enum InputType {
     MachO,
     /// Archive file. (.a)
     Archive,
+    /// IR file. (.ll)
+    Ir,
 }
 
 impl std::fmt::Display for InputType {
@@ -168,6 +170,7 @@ impl std::fmt::Display for InputType {
                 Self::Elf => "elf",
                 Self::MachO => "Mach-O",
                 Self::Archive => "archive",
+                Self::Ir => "ir",
             }
         )
     }
@@ -285,14 +288,19 @@ impl Linker {
         for path in self.options.inputs.clone() {
             let mut file = File::open(&path).map_err(|e| LinkerError::IoError(path.clone(), e))?;
 
-            // determine whether the input is bitcode, ELF with embedded bitcode, an archive file
-            // or an invalid file
-            file.read_exact(&mut buf)
-                .map_err(|e| LinkerError::IoError(path.clone(), e))?;
-            file.rewind()
-                .map_err(|e| LinkerError::IoError(path.clone(), e))?;
-            let in_type = detect_input_type(&buf)
-                .ok_or_else(|| LinkerError::InvalidInputType(path.clone()))?;
+            // Check for .ll extension first (IR files are plain text, no magic number)
+            let in_type = if path.extension().and_then(OsStr::to_str) == Some("ll") {
+                InputType::Ir
+            } else {
+                // determine whether the input is bitcode, ELF with embedded bitcode, an archive file
+                // or an invalid file
+                file.read_exact(&mut buf)
+                    .map_err(|e| LinkerError::IoError(path.clone(), e))?;
+                file.rewind()
+                    .map_err(|e| LinkerError::IoError(path.clone(), e))?;
+                detect_input_type(&buf)
+                    .ok_or_else(|| LinkerError::InvalidInputType(path.clone()))?
+            };
 
             match in_type {
                 InputType::Archive => {
@@ -354,13 +362,27 @@ impl Linker {
             .or_else(|| detect_input_type(&data))
             .ok_or_else(|| LinkerError::InvalidInputType(path.to_owned()))?;
 
-        let bitcode = match in_type {
-            InputType::Bitcode => data,
-            InputType::Elf => match llvm::find_embedded_bitcode(self.context, &data) {
-                Ok(Some(bitcode)) => bitcode,
-                Ok(None) => return Err(LinkerError::MissingBitcodeSection(path.to_owned())),
-                Err(e) => return Err(LinkerError::EmbeddedBitcodeError(e)),
-            },
+        match in_type {
+            InputType::Bitcode => {
+                if !llvm::link_bitcode_buffer(self.context, self.module, &data) {
+                    return Err(LinkerError::LinkModuleError(path.to_owned()));
+                }
+            }
+            InputType::Ir => {
+                if !llvm::link_ir_buffer(self.context, self.module, &data) {
+                    return Err(LinkerError::LinkModuleError(path.to_owned()));
+                }
+            }
+            InputType::Elf => {
+                let bitcode = match llvm::find_embedded_bitcode(self.context, &data) {
+                    Ok(Some(bitcode)) => bitcode,
+                    Ok(None) => return Err(LinkerError::MissingBitcodeSection(path.to_owned())),
+                    Err(e) => return Err(LinkerError::EmbeddedBitcodeError(e)),
+                };
+                if !llvm::link_bitcode_buffer(self.context, self.module, &bitcode) {
+                    return Err(LinkerError::LinkModuleError(path.to_owned()));
+                }
+            }
             // we need to handle this here since archive files could contain
             // mach-o files, eg somecrate.rlib containing lib.rmeta which is
             // mach-o on macos
@@ -368,10 +390,6 @@ impl Linker {
             // this can't really happen
             InputType::Archive => panic!("nested archives not supported duh"),
         };
-
-        if !llvm::link_bitcode_buffer(self.context, self.module, &bitcode) {
-            return Err(LinkerError::LinkModuleError(path.to_owned()));
-        }
 
         Ok(())
     }
