@@ -155,38 +155,28 @@ pub(crate) fn link_ir_buffer(
 ) -> bool {
     let mut linked = false;
     let buffer_name = c"ir_buffer";
-    let buffer = unsafe {
+    let mem_buffer = unsafe {
         LLVMCreateMemoryBufferWithMemoryRange(
             buffer.as_ptr().cast(),
             buffer.len(),
             buffer_name.as_ptr(),
-            1, // IR, so null-terminated
+            1,
         )
     };
 
     let mut temp_module = ptr::null_mut();
     let mut error_msg = ptr::null_mut();
 
-    if unsafe { LLVMParseIRInContext(context, buffer, &mut temp_module, &mut error_msg) } == 0 {
-        if temp_module.is_null() {
-            error!("IR parsing succeeded but module is null");
-        } else {
-            linked = unsafe { LLVMLinkModules2(module, temp_module) } == 0;
-        }
+    if unsafe { LLVMParseIRInContext(context, mem_buffer, &mut temp_module, &mut error_msg) } == 0 {
+        linked = unsafe { LLVMLinkModules2(module, temp_module) } == 0;
     } else {
         if !error_msg.is_null() {
-            let err_str = unsafe { CStr::from_ptr(error_msg) };
-            error!("failed to parse IR: {:?}", err_str);
             unsafe { LLVMDisposeMessage(error_msg) };
-        } else {
-            error!("failed to parse IR: unknown error");
         }
         if !temp_module.is_null() {
             unsafe { LLVMDisposeModule(temp_module) };
         }
     }
-
-    unsafe { LLVMDisposeMemoryBuffer(buffer) };
 
     linked
 }
