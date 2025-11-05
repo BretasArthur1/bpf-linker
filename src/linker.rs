@@ -288,19 +288,14 @@ impl Linker {
         for path in self.options.inputs.clone() {
             let mut file = File::open(&path).map_err(|e| LinkerError::IoError(path.clone(), e))?;
 
-            // Check for .ll extension first (IR files are plain text, no magic number)
-            let in_type = if path.extension().and_then(OsStr::to_str) == Some("ll") {
-                InputType::Ir
-            } else {
-                // determine whether the input is bitcode, ELF with embedded bitcode, an archive file
-                // or an invalid file
-                file.read_exact(&mut buf)
-                    .map_err(|e| LinkerError::IoError(path.clone(), e))?;
-                file.rewind()
-                    .map_err(|e| LinkerError::IoError(path.clone(), e))?;
-                detect_input_type(&buf)
-                    .ok_or_else(|| LinkerError::InvalidInputType(path.clone()))?
-            };
+            // determine whether the input is bitcode, ELF with embedded bitcode, an archive file
+            // or an invalid file
+            file.read_exact(&mut buf)
+                .map_err(|e| LinkerError::IoError(path.clone(), e))?;
+            file.rewind()
+                .map_err(|e| LinkerError::IoError(path.clone(), e))?;
+            let in_type = detect_input_type(&buf)
+                .ok_or_else(|| LinkerError::InvalidInputType(path.clone()))?;
 
             match in_type {
                 InputType::Archive => {
@@ -667,9 +662,29 @@ fn detect_input_type(data: &[u8]) -> Option<InputType> {
         _ => {
             if &data[..8] == b"!<arch>\x0A" {
                 Some(InputType::Archive)
+            } else if is_llvm_ir_header(&data) {
+                Some(InputType::Ir)
             } else {
                 None
             }
         }
     }
+}
+
+fn is_llvm_ir_header(data: &[u8]) -> bool {
+
+    // LLVM IR typically starts with so checking for this characters is a good enough heuristic:
+    // - ';' (e.g "; ModuleID = 'foo')
+    // - 'target ...' (e.g "target triple" or "target datalayout")
+    // - 'source_filename' (e.g "source_filename = "foo.ll")
+
+    let trimmed = match data.iter().position(|&b| !b.is_ascii_whitespace()) {
+        Some(position) => &data[position..],
+        None => return false,
+    };
+
+    trimmed.starts_with(b";")
+    || trimmed.starts_with(b"target ")
+    || trimmed.starts_with(b"source_filename")
+
 }
