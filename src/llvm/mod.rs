@@ -160,7 +160,7 @@ pub(crate) fn link_ir_buffer(
             buffer.as_ptr().cast(),
             buffer.len(),
             buffer_name.as_ptr(),
-            1,
+            0,
         )
     };
 
