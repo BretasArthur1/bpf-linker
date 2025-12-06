@@ -1,5 +1,5 @@
 #![expect(unused_crate_dependencies, reason = "used in lib/bin")]
-
+#![cfg(any(feature = "llvm-20", feature = "llvm-21", feature = "rust-llvm-20", feature = "rust-llvm-21"))]
 use std::ffi::CString;
 
 use bpf_linker::{Linker, LinkerInput, LinkerOptions, OutputType};
